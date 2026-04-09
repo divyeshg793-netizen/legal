@@ -11,18 +11,20 @@ const app = express();
 app.use(express.json());
 
 const isServerless = process.env.NETLIFY === "true" || process.env.AWS_LAMBDA_FUNCTION_NAME || process.env.VERCEL;
-const uploadDir = isServerless ? "/tmp/uploads" : "uploads";
 
-if (!fs.existsSync(uploadDir)) {
-  try {
-    fs.mkdirSync(uploadDir, { recursive: true });
-  } catch (err) {
-    console.error("Failed to create upload directory:", err);
+const storage = isServerless ? multer.memoryStorage() : multer.diskStorage({
+  destination: (req, file, cb) => {
+    const dir = "uploads";
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    cb(null, dir);
+  },
+  filename: (req, file, cb) => {
+    cb(null, Date.now() + "-" + file.originalname);
   }
-}
+});
 
 const upload = multer({ 
-  dest: uploadDir,
+  storage: storage,
   limits: { fileSize: 10 * 1024 * 1024 } // 10MB limit
 });
 
@@ -115,30 +117,30 @@ const analyzeText = (text: string, mode: string, language: string) => {
 
 const extractTextFromFile = async (file: any) => {
   if (!file) return "";
-  const filePath = file.path;
   const mimeType = file.mimetype;
   let text = "";
 
   try {
+    const dataBuffer = file.buffer || fs.readFileSync(file.path);
+
     if (mimeType === "application/pdf") {
       const pdf = require("pdf-parse");
-      const dataBuffer = fs.readFileSync(filePath);
       const data = await pdf(dataBuffer);
       text = data.text;
     } else if (mimeType === "application/vnd.openxmlformats-officedocument.wordprocessingml.document") {
-      const result = await mammoth.extractRawText({ path: filePath });
+      const result = await mammoth.extractRawText({ buffer: dataBuffer });
       text = result.value;
     } else if (mimeType.startsWith("text/")) {
-      text = fs.readFileSync(filePath, "utf-8");
+      text = dataBuffer.toString("utf-8");
     } else if (mimeType.startsWith("image/")) {
       text = "OCR Result: [Simulated OCR] This is a legal document extracted from an image. It contains terms like 'liability' and 'third party sharing'.";
     }
   } catch (err) {
     console.error("Extraction error:", err);
   } finally {
-    // Clean up uploaded file
-    if (fs.existsSync(filePath)) {
-      fs.unlinkSync(filePath);
+    // Clean up uploaded file if using disk storage
+    if (file.path && fs.existsSync(file.path)) {
+      fs.unlinkSync(file.path);
     }
   }
   

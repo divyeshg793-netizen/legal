@@ -73,10 +73,17 @@ export default function AnalysisDashboard() {
   const fetchHistory = async () => {
     try {
       const res = await fetch("/api/history");
+      if (!res.ok) throw new Error(`HTTP error! status: ${res.status}`);
       const data = await res.json();
-      setHistory(data);
+      if (Array.isArray(data)) {
+        setHistory(data);
+      } else {
+        console.error("History data is not an array:", data);
+        setHistory([]);
+      }
     } catch (err) {
       console.error("Failed to fetch history", err);
+      setHistory([]);
     }
   };
 
@@ -926,11 +933,11 @@ export default function AnalysisDashboard() {
               </h3>
             </div>
             <div className="space-y-4 max-h-[600px] overflow-y-auto pr-2 custom-scrollbar">
-              {history.length === 0 ? (
+              {Array.isArray(history) && history.length === 0 ? (
                 <div className="py-16 text-center text-slate-500 italic text-sm bg-slate-950 rounded-xl border border-dashed border-slate-800">
                   No history yet.
                 </div>
-              ) : (
+              ) : Array.isArray(history) ? (
                 history.map((item, i) => (
                   <div 
                     key={i} 
@@ -950,6 +957,10 @@ export default function AnalysisDashboard() {
                     <p className="text-[10px] text-slate-500 font-bold uppercase tracking-widest">{new Date(item.timestamp).toLocaleDateString()}</p>
                   </div>
                 ))
+              ) : (
+                <div className="py-8 text-center text-red-400 bg-red-950/20 rounded-xl border border-red-900/30">
+                  Failed to load history.
+                </div>
               )}
             </div>
           </div>
@@ -1045,21 +1056,27 @@ function ResultCard({ result, onSpeak, onCopy, copied }: { result: AnalysisResul
           <ShieldAlert className="w-5 h-5 text-red-400" /> Risk Analysis
         </h3>
         <div className="space-y-4">
-          {result.risks.map((risk, i) => (
-            <div key={i} className="p-5 rounded-xl bg-slate-950 border border-slate-800 hover:bg-slate-900 hover:border-blue-900/50 hover:shadow-md transition-all">
-              <div className="flex items-center justify-between mb-3">
-                <h4 className="font-bold text-sm text-slate-100">{risk.clause}</h4>
-                <span className={cn(
-                  "px-2.5 py-1 rounded-lg text-[10px] font-bold uppercase tracking-wider",
-                  risk.level === "High" ? "bg-red-900/20 text-red-400" : 
-                  risk.level === "Medium" ? "bg-amber-900/20 text-amber-400" : "bg-emerald-900/20 text-emerald-400"
-                )}>
-                  {risk.level}
-                </span>
+          {Array.isArray(result.risks) ? (
+            result.risks.map((risk, i) => (
+              <div key={i} className="p-5 rounded-xl bg-slate-950 border border-slate-800 hover:bg-slate-900 hover:border-blue-900/50 hover:shadow-md transition-all">
+                <div className="flex items-center justify-between mb-3">
+                  <h4 className="font-bold text-sm text-slate-100">{risk.clause}</h4>
+                  <span className={cn(
+                    "px-2.5 py-1 rounded-lg text-[10px] font-bold uppercase tracking-wider",
+                    risk.level === "High" ? "bg-red-900/20 text-red-400" : 
+                    risk.level === "Medium" ? "bg-amber-900/20 text-amber-400" : "bg-emerald-900/20 text-emerald-400"
+                  )}>
+                    {risk.level}
+                  </span>
+                </div>
+                <p className="text-xs text-slate-400 leading-relaxed font-medium">{risk.description}</p>
               </div>
-              <p className="text-xs text-slate-400 leading-relaxed font-medium">{risk.description}</p>
+            ))
+          ) : (
+            <div className="py-8 text-center text-slate-500 italic text-sm bg-slate-950 rounded-xl border border-dashed border-slate-800">
+              No specific risks identified.
             </div>
-          ))}
+          )}
         </div>
       </div>
 
