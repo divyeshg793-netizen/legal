@@ -12,6 +12,7 @@ import { AnalysisResult } from "../types";
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip } from "recharts";
 import jsPDF from "jspdf";
 import { toPng } from "html-to-image";
+import { GoogleGenAI } from "@google/genai";
 
 export default function AnalysisDashboard() {
   const [activeInputTab, setActiveInputTab] = useState<"upload" | "paste" | "url">("upload");
@@ -118,50 +119,103 @@ export default function AnalysisDashboard() {
     setError(null);
     setLoadingStep(0);
 
-    const formData = new FormData();
-    formData.append("docTitle", docTitle || (file ? file.name : "Document 1"));
-    if (isComparing) {
-      formData.append("compareDocTitle", compareDocTitle || (compareFile ? compareFile.name : "Document 2"));
-    }
-
-    if (activeInputTab === "upload") {
-      if (file) formData.append("file", file);
-      if (isComparing && compareFile) formData.append("compareFile", compareFile);
-    } else if (activeInputTab === "paste") {
-      formData.append("text", inputText);
-      if (isComparing && compareText) formData.append("compareText", compareText);
-    } else if (activeInputTab === "url") {
-      if (!url.startsWith("http://") && !url.startsWith("https://")) {
-        setError("Please enter a valid URL starting with http:// or https://");
-        setIsAnalyzing(false);
-        return;
-      }
-      formData.append("text", `Analyzing URL: ${url}. [Simulated] This terms of service agreement contains standard clauses regarding user data and liability.`);
-    }
-
-    formData.append("mode", is15Mode ? "15" : "standard");
-    formData.append("language", language);
-
     try {
-      const res = await fetch("/api/analyze", {
-        method: "POST",
-        body: formData,
+      let textToAnalyze = inputText;
+      let compareTextToAnalyze = compareText;
+
+      // 1. Extract text if files are present
+      if (activeInputTab === "upload" && (file || compareFile)) {
+        setLoadingStep(1); // Extracting text
+        const formData = new FormData();
+        if (file) formData.append("file", file);
+        if (isComparing && compareFile) formData.append("compareFile", compareFile);
+
+        const extractRes = await fetch("/api/extract", {
+          method: "POST",
+          body: formData,
+        });
+
+        if (!extractRes.ok) {
+          const errData = await extractRes.json();
+          throw new Error(errData.error || "Failed to extract text from files");
+        }
+
+        const extractData = await extractRes.json();
+        textToAnalyze = extractData.text || textToAnalyze;
+        compareTextToAnalyze = extractData.compareText || compareTextToAnalyze;
+      } else if (activeInputTab === "url") {
+        textToAnalyze = `Analyzing URL: ${url}. [Simulated] This terms of service agreement contains standard clauses regarding user data and liability.`;
+      }
+
+      if (!textToAnalyze || textToAnalyze.trim().length < 10) {
+        throw new Error("No document text found to analyze. Please upload a file or paste text.");
+      }
+
+      // 2. Call Gemini
+      setLoadingStep(2); // Analyzing...
+      const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+      
+      const systemPrompt = `You are an expert legal document analyzer. 
+Analyze the provided document text and return a structured analysis.
+Mode: ${is15Mode ? "Explain like I'm 15 (simple terms, very easy to understand)" : "Standard Professional Analysis"}
+Language: ${language}
+
+If comparing two documents, highlight the key differences and which one is safer.
+
+Return ONLY a JSON object matching this schema:
+{
+  "summary": "string (markdown allowed, use bold for key terms)",
+  "risks": [{"clause": "string", "level": "High" | "Medium" | "Low", "description": "string"}],
+  "riskLevel": "High" | "Medium" | "Low",
+  "trustScore": number (0-100),
+  "decision": "Safe to Accept" | "Review Carefully" | "High Risk – Avoid",
+  "compareResult": { // Only if comparing
+    "summary": "string",
+    "risks": [{"clause": "string", "level": "High" | "Medium" | "Low", "description": "string"}],
+    "riskLevel": "High" | "Medium" | "Low",
+    "trustScore": number,
+    "decision": "string",
+    "diffSummary": "string"
+  }
+}`;
+
+      const prompt = `Document 1: ${textToAnalyze}
+${isComparing ? `Document 2: ${compareTextToAnalyze}` : ""}`;
+
+      const response = await ai.models.generateContent({
+        model: "gemini-3-flash-preview",
+        contents: prompt,
+        config: {
+          systemInstruction: systemPrompt,
+          responseMimeType: "application/json"
+        }
       });
 
-      if (!res.ok) {
-        const data = await res.json();
-        throw new Error(data.error || "Analysis failed");
+      const analysisResult = JSON.parse(response.text || "{}");
+      
+      // Add titles
+      analysisResult.docTitle = docTitle || (file ? file.name : "Document 1");
+      if (isComparing) {
+        analysisResult.compareDocTitle = compareDocTitle || (compareFile ? compareFile.name : "Document 2");
       }
 
-      const data = await res.json();
-      data.docTitle = docTitle || (file ? file.name : "Document 1");
-      if (isComparing) {
-        data.compareDocTitle = compareDocTitle || (compareFile ? compareFile.name : "Document 2");
+      setResult(analysisResult);
+      
+      // 3. Save to history
+      try {
+        await fetch("/api/history/save", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(analysisResult),
+        });
+        fetchHistory();
+      } catch (saveErr) {
+        console.warn("Failed to save to history", saveErr);
       }
-      setResult(data);
-      fetchHistory();
+
     } catch (err: any) {
-      setError(err.message);
+      console.error("Analysis error:", err);
+      setError(err.message || "An unexpected error occurred during analysis.");
     } finally {
       setIsAnalyzing(false);
     }

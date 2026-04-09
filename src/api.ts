@@ -121,7 +121,14 @@ const extractTextFromFile = async (file: any) => {
   let text = "";
 
   try {
-    const dataBuffer = file.buffer || fs.readFileSync(file.path);
+    let dataBuffer: Buffer;
+    if (file.buffer) {
+      dataBuffer = file.buffer;
+    } else if (file.path) {
+      dataBuffer = fs.readFileSync(file.path);
+    } else {
+      throw new Error("No file data found");
+    }
 
     if (mimeType === "application/pdf") {
       const pdf = require("pdf-parse");
@@ -133,19 +140,63 @@ const extractTextFromFile = async (file: any) => {
     } else if (mimeType.startsWith("text/")) {
       text = dataBuffer.toString("utf-8");
     } else if (mimeType.startsWith("image/")) {
-      text = "OCR Result: [Simulated OCR] This is a legal document extracted from an image. It contains terms like 'liability' and 'third party sharing'.";
+      text = "[Image file - OCR not implemented in this demo]";
     }
   } catch (err) {
     console.error("Extraction error:", err);
+    throw err;
   } finally {
     // Clean up uploaded file if using disk storage
     if (file.path && fs.existsSync(file.path)) {
-      fs.unlinkSync(file.path);
+      try {
+        fs.unlinkSync(file.path);
+      } catch (e) {
+        console.error("Cleanup error:", e);
+      }
     }
   }
   
   return text;
 };
+
+// Extract Endpoint (New)
+app.post("/api/extract", cpUpload, async (req: any, res: any) => {
+  try {
+    const files = req.files as { [fieldname: string]: Express.Multer.File[] };
+    let text = "";
+    let compareText = "";
+
+    if (files?.file?.[0]) {
+      text = await extractTextFromFile(files.file[0]);
+    }
+    
+    if (files?.compareFile?.[0]) {
+      compareText = await extractTextFromFile(files.compareFile[0]);
+    }
+
+    res.json({ text, compareText });
+  } catch (error: any) {
+    console.error("Extraction endpoint error:", error);
+    res.status(500).json({ error: error.message || "Failed to extract text from document." });
+  }
+});
+
+// Save History Endpoint
+app.post("/api/history/save", (req, res) => {
+  try {
+    const result = req.body;
+    if (!result || !result.summary) {
+      return res.status(400).json({ error: "Invalid analysis result" });
+    }
+    history.push({
+      ...result,
+      timestamp: new Date().toISOString()
+    });
+    res.json({ success: true });
+  } catch (error) {
+    res.status(500).json({ error: "Failed to save history" });
+  }
+});
 
 // Analyze Endpoint
 app.post("/api/analyze", cpUpload, async (req: any, res: any) => {
@@ -194,6 +245,17 @@ app.post("/api/analyze", cpUpload, async (req: any, res: any) => {
     console.error("Analysis error:", error);
     res.status(500).json({ error: "Failed to process document." });
   }
+});
+
+// Global error handler
+app.use((err: any, req: any, res: any, next: any) => {
+  console.error("Global API Error:", err);
+  
+  if (err instanceof multer.MulterError) {
+    return res.status(400).json({ error: `File upload error: ${err.message}` });
+  }
+  
+  res.status(500).json({ error: err.message || "Internal Server Error" });
 });
 
 export default app;
