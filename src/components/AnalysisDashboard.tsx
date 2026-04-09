@@ -136,8 +136,20 @@ export default function AnalysisDashboard() {
         });
 
         if (!extractRes.ok) {
-          const errData = await extractRes.json();
-          throw new Error(errData.error || "Failed to extract text from files");
+          let errorMessage = "Failed to extract text from files";
+          try {
+            const errData = await extractRes.json();
+            errorMessage = errData.error || errorMessage;
+          } catch (jsonErr) {
+            // If not JSON, try to get text
+            try {
+              const textErr = await extractRes.text();
+              if (textErr && textErr.length < 200) errorMessage = textErr;
+            } catch (textErr) {
+              console.error("Could not parse error response", textErr);
+            }
+          }
+          throw new Error(errorMessage);
         }
 
         const extractData = await extractRes.json();

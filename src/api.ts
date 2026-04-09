@@ -118,7 +118,11 @@ const analyzeText = (text: string, mode: string, language: string) => {
 const extractTextFromFile = async (file: any) => {
   if (!file) return "";
   const mimeType = file.mimetype;
+  const originalName = file.originalname || "";
+  const extension = path.extname(originalName).toLowerCase();
   let text = "";
+
+  console.log(`Extracting text from: ${originalName} (Mime: ${mimeType}, Ext: ${extension})`);
 
   try {
     let dataBuffer: Buffer;
@@ -127,24 +131,36 @@ const extractTextFromFile = async (file: any) => {
     } else if (file.path) {
       dataBuffer = fs.readFileSync(file.path);
     } else {
-      throw new Error("No file data found");
+      throw new Error("No file data found in request");
     }
 
-    if (mimeType === "application/pdf") {
+    // Try by mime type first, then fallback to extension
+    if (mimeType === "application/pdf" || extension === ".pdf") {
       const pdf = require("pdf-parse");
       const data = await pdf(dataBuffer);
       text = data.text;
-    } else if (mimeType === "application/vnd.openxmlformats-officedocument.wordprocessingml.document") {
+    } 
+    else if (mimeType === "application/vnd.openxmlformats-officedocument.wordprocessingml.document" || extension === ".docx") {
       const result = await mammoth.extractRawText({ buffer: dataBuffer });
       text = result.value;
-    } else if (mimeType.startsWith("text/")) {
+    } 
+    else if (mimeType.startsWith("text/") || extension === ".txt" || extension === ".md") {
       text = dataBuffer.toString("utf-8");
-    } else if (mimeType.startsWith("image/")) {
+    } 
+    else if (mimeType.startsWith("image/")) {
       text = "[Image file - OCR not implemented in this demo]";
     }
-  } catch (err) {
-    console.error("Extraction error:", err);
-    throw err;
+    else {
+      // Last resort: try to treat as text if it's small
+      if (dataBuffer.length < 1024 * 1024) {
+        text = dataBuffer.toString("utf-8");
+      } else {
+        throw new Error(`Unsupported file type: ${mimeType} (${extension})`);
+      }
+    }
+  } catch (err: any) {
+    console.error("Extraction error details:", err);
+    throw new Error(`Failed to extract text: ${err.message || "Unknown error"}`);
   } finally {
     // Clean up uploaded file if using disk storage
     if (file.path && fs.existsSync(file.path)) {
@@ -156,6 +172,10 @@ const extractTextFromFile = async (file: any) => {
     }
   }
   
+  if (!text || text.trim().length === 0) {
+    throw new Error("Extracted text is empty. The file might be corrupted or password protected.");
+  }
+
   return text;
 };
 
