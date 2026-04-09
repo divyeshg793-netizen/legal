@@ -1,11 +1,12 @@
 import express from "express";
 import multer from "multer";
-import mammoth from "mammoth";
 import fs from "fs";
 import { createRequire } from "module";
 import path from "path";
 
 const require = createRequire(import.meta.url);
+// Load mammoth and pdf-parse using require for better compatibility in serverless
+const mammoth = require("mammoth");
 
 const app = express();
 app.use(express.json());
@@ -136,13 +137,23 @@ const extractTextFromFile = async (file: any) => {
 
     // Try by mime type first, then fallback to extension
     if (mimeType === "application/pdf" || extension === ".pdf") {
-      const pdf = require("pdf-parse");
-      const data = await pdf(dataBuffer);
-      text = data.text;
+      try {
+        const pdf = require("pdf-parse");
+        const data = await pdf(dataBuffer);
+        text = data.text;
+      } catch (pdfErr: any) {
+        console.error("PDF extraction failed:", pdfErr);
+        throw new Error(`PDF extraction failed: ${pdfErr.message}`);
+      }
     } 
     else if (mimeType === "application/vnd.openxmlformats-officedocument.wordprocessingml.document" || extension === ".docx") {
-      const result = await mammoth.extractRawText({ buffer: dataBuffer });
-      text = result.value;
+      try {
+        const result = await mammoth.extractRawText({ buffer: dataBuffer });
+        text = result.value;
+      } catch (docxErr: any) {
+        console.error("DOCX extraction failed:", docxErr);
+        throw new Error(`DOCX extraction failed: ${docxErr.message}`);
+      }
     } 
     else if (mimeType.startsWith("text/") || extension === ".txt" || extension === ".md") {
       text = dataBuffer.toString("utf-8");
@@ -153,7 +164,11 @@ const extractTextFromFile = async (file: any) => {
     else {
       // Last resort: try to treat as text if it's small
       if (dataBuffer.length < 1024 * 1024) {
-        text = dataBuffer.toString("utf-8");
+        try {
+          text = dataBuffer.toString("utf-8");
+        } catch (e) {
+          throw new Error(`Unsupported file type and failed to read as text: ${mimeType} (${extension})`);
+        }
       } else {
         throw new Error(`Unsupported file type: ${mimeType} (${extension})`);
       }

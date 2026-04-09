@@ -13,6 +13,11 @@ import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip } from "recharts";
 import jsPDF from "jspdf";
 import { toPng } from "html-to-image";
 import { GoogleGenAI } from "@google/genai";
+import * as mammoth from "mammoth";
+import * as pdfjs from "pdfjs-dist";
+
+// Set up PDF.js worker
+pdfjs.GlobalWorkerOptions.workerSrc = `//cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjs.version}/pdf.worker.min.js`;
 
 export default function AnalysisDashboard() {
   const [activeInputTab, setActiveInputTab] = useState<"upload" | "paste" | "url">("upload");
@@ -114,6 +119,33 @@ export default function AnalysisDashboard() {
     }
   };
 
+  const extractTextLocally = async (file: File): Promise<string> => {
+    const extension = file.name.split('.').pop()?.toLowerCase();
+    
+    if (extension === 'pdf') {
+      const arrayBuffer = await file.arrayBuffer();
+      const pdf = await pdfjs.getDocument({ data: arrayBuffer }).promise;
+      let fullText = "";
+      for (let i = 1; i <= pdf.numPages; i++) {
+        const page = await pdf.getPage(i);
+        const textContent = await page.getTextContent();
+        const pageText = textContent.items.map((item: any) => item.str).join(" ");
+        fullText += pageText + "\n";
+      }
+      return fullText;
+    } 
+    else if (extension === 'docx') {
+      const arrayBuffer = await file.arrayBuffer();
+      const result = await mammoth.extractRawText({ arrayBuffer });
+      return result.value;
+    } 
+    else if (extension === 'txt' || extension === 'md') {
+      return await file.text();
+    }
+    
+    throw new Error(`Unsupported file type: ${extension}`);
+  };
+
   const handleAnalyze = async () => {
     setIsAnalyzing(true);
     setError(null);
@@ -123,38 +155,48 @@ export default function AnalysisDashboard() {
       let textToAnalyze = inputText;
       let compareTextToAnalyze = compareText;
 
-      // 1. Extract text if files are present
+      // 1. Extract text locally if files are present
       if (activeInputTab === "upload" && (file || compareFile)) {
         setLoadingStep(1); // Extracting text
-        const formData = new FormData();
-        if (file) formData.append("file", file);
-        if (isComparing && compareFile) formData.append("compareFile", compareFile);
-
-        const extractRes = await fetch("/api/extract", {
-          method: "POST",
-          body: formData,
-        });
-
-        if (!extractRes.ok) {
-          let errorMessage = "Failed to extract text from files";
-          try {
-            const errData = await extractRes.json();
-            errorMessage = errData.error || errorMessage;
-          } catch (jsonErr) {
-            // If not JSON, try to get text
-            try {
-              const textErr = await extractRes.text();
-              if (textErr && textErr.length < 200) errorMessage = textErr;
-            } catch (textErr) {
-              console.error("Could not parse error response", textErr);
-            }
+        
+        try {
+          if (file) {
+            textToAnalyze = await extractTextLocally(file);
           }
-          throw new Error(errorMessage);
-        }
+          if (isComparing && compareFile) {
+            compareTextToAnalyze = await extractTextLocally(compareFile);
+          }
+        } catch (localErr: any) {
+          console.warn("Local extraction failed, falling back to server:", localErr);
+          
+          // Fallback to server extraction if local fails
+          const formData = new FormData();
+          if (file) formData.append("file", file);
+          if (isComparing && compareFile) formData.append("compareFile", compareFile);
 
-        const extractData = await extractRes.json();
-        textToAnalyze = extractData.text || textToAnalyze;
-        compareTextToAnalyze = extractData.compareText || compareTextToAnalyze;
+          const extractRes = await fetch("/api/extract", {
+            method: "POST",
+            body: formData,
+          });
+
+          if (!extractRes.ok) {
+            let errorMessage = "Failed to extract text from files";
+            try {
+              const errData = await extractRes.json();
+              errorMessage = errData.error || errorMessage;
+            } catch (jsonErr) {
+              try {
+                const textErr = await extractRes.text();
+                if (textErr && textErr.length < 200) errorMessage = textErr;
+              } catch (textErr) {}
+            }
+            throw new Error(errorMessage);
+          }
+
+          const extractData = await extractRes.json();
+          textToAnalyze = extractData.text || textToAnalyze;
+          compareTextToAnalyze = extractData.compareText || compareTextToAnalyze;
+        }
       } else if (activeInputTab === "url") {
         textToAnalyze = `Analyzing URL: ${url}. [Simulated] This terms of service agreement contains standard clauses regarding user data and liability.`;
       }
@@ -165,7 +207,11 @@ export default function AnalysisDashboard() {
 
       // 2. Call Gemini
       setLoadingStep(2); // Analyzing...
-      const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+      const apiKey = process.env.GEMINI_API_KEY;
+      if (!apiKey) {
+        throw new Error("Gemini API Key is missing. Please set GEMINI_API_KEY in your environment variables.");
+      }
+      const ai = new GoogleGenAI({ apiKey });
       
       const systemPrompt = `You are an expert legal document analyzer. 
 Analyze the provided document text and return a structured analysis.
