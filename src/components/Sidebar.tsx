@@ -1,5 +1,5 @@
 import { LayoutDashboard, FileText, ShieldCheck } from "lucide-react";
-import { cn } from "@/src/lib/utils";
+import { cn } from "../lib/utils";
 
 interface SidebarProps {
   activeTab: string;

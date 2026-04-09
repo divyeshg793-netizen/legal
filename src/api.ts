@@ -6,15 +6,19 @@ import { createRequire } from "module";
 import path from "path";
 
 const require = createRequire(import.meta.url);
-const pdf = require("pdf-parse");
 
 const app = express();
 app.use(express.json());
 
-// Use /tmp for uploads in serverless environments
-const uploadDir = process.env.NETLIFY ? "/tmp/uploads" : "uploads";
+const isServerless = process.env.NETLIFY === "true" || process.env.AWS_LAMBDA_FUNCTION_NAME || process.env.VERCEL;
+const uploadDir = isServerless ? "/tmp/uploads" : "uploads";
+
 if (!fs.existsSync(uploadDir)) {
-  fs.mkdirSync(uploadDir, { recursive: true });
+  try {
+    fs.mkdirSync(uploadDir, { recursive: true });
+  } catch (err) {
+    console.error("Failed to create upload directory:", err);
+  }
 }
 
 const upload = multer({ 
@@ -117,6 +121,7 @@ const extractTextFromFile = async (file: any) => {
 
   try {
     if (mimeType === "application/pdf") {
+      const pdf = require("pdf-parse");
       const dataBuffer = fs.readFileSync(filePath);
       const data = await pdf(dataBuffer);
       text = data.text;

@@ -1,10 +1,46 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, Component, ErrorInfo, ReactNode } from "react";
 import Sidebar from "./components/Sidebar";
 import LandingPage from "./components/LandingPage";
 import AnalysisDashboard from "./components/AnalysisDashboard";
 import { motion, AnimatePresence } from "motion/react";
 import { Shield, TrendingUp, Clock, FileCheck, History, ArrowRight } from "lucide-react";
 import { cn } from "./lib/utils";
+
+class ErrorBoundary extends Component<{ children: ReactNode }, { hasError: boolean, error: Error | null }> {
+  constructor(props: { children: ReactNode }) {
+    super(props);
+    this.state = { hasError: false, error: null };
+  }
+
+  static getDerivedStateFromError(error: Error) {
+    return { hasError: true, error };
+  }
+
+  componentDidCatch(error: Error, errorInfo: ErrorInfo) {
+    console.error("ErrorBoundary caught an error", error, errorInfo);
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div className="min-h-screen bg-slate-950 flex items-center justify-center p-4">
+          <div className="bg-slate-900 border border-red-900/50 p-8 rounded-2xl max-w-md w-full text-center">
+            <h1 className="text-2xl font-bold text-white mb-4">Something went wrong</h1>
+            <p className="text-slate-400 mb-6">{this.state.error?.message || "An unexpected error occurred."}</p>
+            <button 
+              onClick={() => window.location.reload()}
+              className="px-6 py-2 bg-blue-600 text-white rounded-lg font-bold hover:bg-blue-700 transition-colors"
+            >
+              Reload Page
+            </button>
+          </div>
+        </div>
+      );
+    }
+
+    return this.props.children;
+  }
+}
 
 export default function App() {
   const [activeTab, setActiveTab] = useState("landing");
@@ -20,10 +56,17 @@ export default function App() {
   const fetchHistory = async () => {
     try {
       const res = await fetch("/api/history");
+      if (!res.ok) throw new Error(`HTTP error! status: ${res.status}`);
       const data = await res.json();
-      setHistory(data);
+      if (Array.isArray(data)) {
+        setHistory(data);
+      } else {
+        console.error("History data is not an array:", data);
+        setHistory([]);
+      }
     } catch (err) {
       console.error("Failed to fetch history", err);
+      setHistory([]);
     }
   };
 
@@ -33,7 +76,8 @@ export default function App() {
   };
 
   return (
-    <AnimatePresence mode="wait">
+    <ErrorBoundary>
+      <AnimatePresence mode="wait">
       {!isStarted ? (
         <motion.div
           key="landing"
@@ -94,11 +138,11 @@ export default function App() {
                           </button>
                         </div>
                         <div className="space-y-4">
-                          {history.length === 0 ? (
+                          {Array.isArray(history) && history.length === 0 ? (
                             <div className="py-16 text-center text-slate-500 italic bg-slate-950 rounded-xl border border-dashed border-slate-800">
                               No history yet. Start by analyzing a document.
                             </div>
-                          ) : (
+                          ) : Array.isArray(history) ? (
                             history.map((item, i) => (
                               <ActivityItem 
                                 key={i}
@@ -108,6 +152,10 @@ export default function App() {
                                 score={item.trustScore} 
                               />
                             ))
+                          ) : (
+                            <div className="py-8 text-center text-red-400 bg-red-950/20 rounded-xl border border-red-900/30">
+                              Failed to load history.
+                            </div>
                           )}
                         </div>
                       </div>
@@ -142,7 +190,8 @@ export default function App() {
           </main>
         </motion.div>
       )}
-    </AnimatePresence>
+      </AnimatePresence>
+    </ErrorBoundary>
   );
 }
 
